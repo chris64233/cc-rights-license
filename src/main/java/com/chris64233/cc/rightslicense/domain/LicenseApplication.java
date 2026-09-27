@@ -22,7 +22,6 @@ import java.util.List;
 @Entity
 @Table(name = "license_applications")
 public class LicenseApplication {
-
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -65,12 +64,46 @@ public class LicenseApplication {
     @Column(length = 2000)
     private String conflictReason;
 
+    // ---- 根授权的转授权声明（申请创建时由权利人一方声明，批准后固化到授权版本 v1） ----
+
+    @Column(nullable = false)
+    private boolean sublicensable = false;
+
+    /** 允许的最大绝对层级深度；不允许转授权时为 null */
+    private Integer maxDepth;
+
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "application_sub_territories",
+            joinColumns = @JoinColumn(name = "application_id"))
+    @OrderColumn(name = "idx")
+    @Column(name = "territory", nullable = false, length = 100)
+    private List<String> subTerritories = new ArrayList<>();
+
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "application_sub_media",
+            joinColumns = @JoinColumn(name = "application_id"))
+    @OrderColumn(name = "idx")
+    @Column(name = "medium", nullable = false, length = 100)
+    private List<String> subMedia = new ArrayList<>();
+
+    private LocalDate subStartDate;
+
+    private LocalDate subEndDate;
+
     protected LicenseApplication() {
     }
 
     public LicenseApplication(Work work, String licensee, LicenseType type,
                               LocalDate startDate, LocalDate endDate,
                               List<String> territories, List<String> media) {
+        this(work, licensee, type, startDate, endDate, territories, media,
+                SublicensePolicy.forbidden());
+    }
+
+    public LicenseApplication(Work work, String licensee, LicenseType type,
+                              LocalDate startDate, LocalDate endDate,
+                              List<String> territories, List<String> media,
+                              SublicensePolicy policy) {
         this.work = work;
         this.licensee = licensee;
         this.type = type;
@@ -78,6 +111,16 @@ public class LicenseApplication {
         this.endDate = endDate;
         this.territories = new ArrayList<>(territories);
         this.media = new ArrayList<>(media);
+        this.sublicensable = policy.sublicensable();
+        this.maxDepth = policy.maxDepth();
+        if (policy.subTerritories() != null) {
+            this.subTerritories = new ArrayList<>(policy.subTerritories());
+        }
+        if (policy.subMedia() != null) {
+            this.subMedia = new ArrayList<>(policy.subMedia());
+        }
+        this.subStartDate = policy.subStartDate();
+        this.subEndDate = policy.subEndDate();
     }
 
     public Long getId() {
@@ -118,6 +161,35 @@ public class LicenseApplication {
 
     public String getConflictReason() {
         return conflictReason;
+    }
+
+    public boolean isSublicensable() {
+        return sublicensable;
+    }
+
+    public Integer getMaxDepth() {
+        return maxDepth;
+    }
+
+    public List<String> getSubTerritories() {
+        return subTerritories;
+    }
+
+    public List<String> getSubMedia() {
+        return subMedia;
+    }
+
+    public LocalDate getSubStartDate() {
+        return subStartDate;
+    }
+
+    public LocalDate getSubEndDate() {
+        return subEndDate;
+    }
+
+    public SublicensePolicy getPolicy() {
+        return new SublicensePolicy(sublicensable, maxDepth,
+                List.copyOf(subTerritories), List.copyOf(subMedia), subStartDate, subEndDate);
     }
 
     public void markRejected() {

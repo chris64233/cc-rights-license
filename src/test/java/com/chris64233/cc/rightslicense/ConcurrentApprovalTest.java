@@ -22,7 +22,7 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
-class ConcurrentApprovalTest {
+class ConcurrentApprovalTest extends AbstractIntegrationTest {
 
     @Autowired
     private LicenseService licenseService;

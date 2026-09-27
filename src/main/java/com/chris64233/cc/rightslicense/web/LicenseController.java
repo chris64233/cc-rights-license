@@ -42,7 +42,8 @@ public class LicenseController {
         LicenseApplication application = licenseService.createApplication(
                 code, request.licensee(), request.type(),
                 request.startDate(), request.endDate(),
-                request.territories(), request.media());
+                request.territories(), request.media(),
+                PolicyMapper.toDomain(request.sublicense()));
         return ApplicationResponse.of(application);
     }
 

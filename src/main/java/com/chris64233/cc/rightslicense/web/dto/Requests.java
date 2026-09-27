@@ -31,12 +31,52 @@ public final class Requests {
             @NotNull LocalDate startDate,
             @NotNull LocalDate endDate,
             @NotEmpty List<String> territories,
-            @NotEmpty List<String> media) {
+            @NotEmpty List<String> media,
+            SublicensePolicyRequest sublicense) {
     }
 
     public record SubmitDecisionRequest(
             @NotNull Long holderId,
             @NotNull DecisionValue decision,
             @NotBlank String eventNumber) {
+    }
+
+    /** 根授权或下级授权中"是否允许继续转授权"的声明 */
+    public record SublicensePolicyRequest(
+            @NotNull Boolean allowed,
+            Integer maxDepth,
+            List<String> territories,
+            List<String> media,
+            LocalDate startDate,
+            LocalDate endDate) {
+    }
+
+    public record CreateSublicenseRequest(
+            @NotBlank String sublicenseNo,
+            @NotBlank String parentGrantNo,
+            @NotBlank String licensee,
+            @NotNull LicenseType type,
+            @NotNull LocalDate startDate,
+            @NotNull LocalDate endDate,
+            @NotEmpty List<String> territories,
+            @NotEmpty List<String> media,
+            SublicensePolicyRequest sublicense) {
+    }
+
+    public record SublicenseDecisionRequest(
+            @NotBlank String decider,
+            @NotNull DecisionValue decision,
+            @NotBlank String eventNumber) {
+    }
+
+    public record LifecycleEventRequest(@NotBlank String eventNo) {
+    }
+
+    public record ReduceScopeRequest(
+            @NotBlank String eventNo,
+            LocalDate startDate,
+            LocalDate endDate,
+            List<String> territories,
+            List<String> media) {
     }
 }

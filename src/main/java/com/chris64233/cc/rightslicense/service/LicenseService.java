@@ -2,12 +2,15 @@ package com.chris64233.cc.rightslicense.service;
 
 import com.chris64233.cc.rightslicense.domain.ApplicationStatus;
 import com.chris64233.cc.rightslicense.domain.DecisionValue;
+import com.chris64233.cc.rightslicense.domain.GrantVersion;
 import com.chris64233.cc.rightslicense.domain.LicenseApplication;
 import com.chris64233.cc.rightslicense.domain.LicenseGrant;
 import com.chris64233.cc.rightslicense.domain.LicenseType;
 import com.chris64233.cc.rightslicense.domain.RightsDecision;
 import com.chris64233.cc.rightslicense.domain.RightsHolder;
+import com.chris64233.cc.rightslicense.domain.SublicensePolicy;
 import com.chris64233.cc.rightslicense.domain.Work;
+import com.chris64233.cc.rightslicense.repo.GrantVersionRepository;
 import com.chris64233.cc.rightslicense.repo.LicenseApplicationRepository;
 import com.chris64233.cc.rightslicense.repo.LicenseGrantRepository;
 import com.chris64233.cc.rightslicense.repo.RightsDecisionRepository;
@@ -32,23 +35,35 @@ public class LicenseService {
     private final LicenseApplicationRepository applicationRepository;
     private final RightsDecisionRepository decisionRepository;
     private final LicenseGrantRepository grantRepository;
+    private final GrantVersionRepository grantVersionRepository;
 
     public LicenseService(WorkRepository workRepository,
                           RightsHolderRepository holderRepository,
                           LicenseApplicationRepository applicationRepository,
                           RightsDecisionRepository decisionRepository,
-                          LicenseGrantRepository grantRepository) {
+                          LicenseGrantRepository grantRepository,
+                          GrantVersionRepository grantVersionRepository) {
         this.workRepository = workRepository;
         this.holderRepository = holderRepository;
         this.applicationRepository = applicationRepository;
         this.decisionRepository = decisionRepository;
         this.grantRepository = grantRepository;
+        this.grantVersionRepository = grantVersionRepository;
     }
 
     @Transactional
     public LicenseApplication createApplication(String workCode, String licensee, LicenseType type,
                                                 LocalDate startDate, LocalDate endDate,
                                                 List<String> territories, List<String> media) {
+        return createApplication(workCode, licensee, type, startDate, endDate,
+                territories, media, SublicensePolicy.forbidden());
+    }
+
+    @Transactional
+    public LicenseApplication createApplication(String workCode, String licensee, LicenseType type,
+                                                LocalDate startDate, LocalDate endDate,
+                                                List<String> territories, List<String> media,
+                                                SublicensePolicy policy) {
         Work work = workRepository.findByCode(workCode)
                 .orElseThrow(() -> BusinessException.notFound("作品不存在: " + workCode));
         if (licensee == null || licensee.isBlank()) {
@@ -60,6 +75,8 @@ public class LicenseService {
         validateDates(startDate, endDate);
         List<String> cleanTerritories = normalizeScope(territories, "地域");
         List<String> cleanMedia = normalizeScope(media, "媒介");
+        SublicensePolicy cleanPolicy = normalizePolicy(policy, startDate, endDate,
+                cleanTerritories, cleanMedia);
         BigDecimal totalShares = holderRepository.sumSharesByWorkId(work.getId());
         if (totalShares.compareTo(WorkService.HUNDRED) != 0) {
             throw BusinessException.unprocessable(
@@ -67,7 +84,7 @@ public class LicenseService {
                             + totalShares.stripTrailingZeros().toPlainString() + "%");
         }
         return applicationRepository.save(new LicenseApplication(
-                work, licensee, type, startDate, endDate, cleanTerritories, cleanMedia));
+                work, licensee, type, startDate, endDate, cleanTerritories, cleanMedia, cleanPolicy));
     }
 
     @Transactional
@@ -122,8 +139,11 @@ public class LicenseService {
         Set<LicenseType> blockingTypes = application.getType() == LicenseType.EXCLUSIVE
                 ? Set.of(LicenseType.EXCLUSIVE, LicenseType.NON_EXCLUSIVE)
                 : Set.of(LicenseType.EXCLUSIVE);
+        // 根授权之间做冲突检测；下级转授权必然落在某条根授权范围内，由该根授权代表
         List<LicenseGrant> overlapping = grantRepository.findOverlapping(
-                work.getId(), application.getStartDate(), application.getEndDate(), blockingTypes);
+                work.getId(), application.getStartDate(), application.getEndDate(), blockingTypes).stream()
+                .filter(LicenseGrant::isRoot)
+                .toList();
 
         List<String> conflicts = new ArrayList<>();
         for (LicenseGrant grant : overlapping) {
@@ -140,9 +160,24 @@ public class LicenseService {
         if (!conflicts.isEmpty()) {
             application.markConflict(String.join("；", conflicts));
         } else {
-            grantRepository.save(new LicenseGrant(application));
+            LicenseGrant grant = new LicenseGrant(application);
+            grantRepository.save(grant);
+            // id 生成后补齐含自身的层级链
+            grant.initRootChain();
+            // 固化 v1 版本快照
+            saveVersionSnapshot(grant, "初始授权");
             application.markApproved();
         }
+    }
+
+    private void saveVersionSnapshot(LicenseGrant grant, String reason) {
+        grantVersionRepository.save(new GrantVersion(
+                grant, grant.getCurrentVersion(), grant.getType(),
+                grant.getStartDate(), grant.getEndDate(),
+                grant.getTerritories(), grant.getMedia(),
+                grant.isSublicensable(), grant.getMaxDepth(),
+                grant.getSubTerritories(), grant.getSubMedia(),
+                grant.getSubStartDate(), grant.getSubEndDate(), reason));
     }
 
     @Transactional(readOnly = true)
@@ -171,6 +206,7 @@ public class LicenseService {
                 : Set.of(LicenseType.EXCLUSIVE);
         return grantRepository.findOverlapping(application.getWork().getId(),
                 application.getStartDate(), application.getEndDate(), blockingTypes).stream()
+                .filter(LicenseGrant::isRoot)
                 .filter(grant -> !grant.getApplication().getId().equals(application.getId()))
                 .filter(grant -> !intersect(application.getTerritories(), grant.getTerritories()).isEmpty()
                         && !intersect(application.getMedia(), grant.getMedia()).isEmpty())
@@ -220,5 +256,41 @@ public class LicenseService {
             cleaned.add(value.trim());
         }
         return List.copyOf(cleaned);
+    }
+
+    /**
+     * 规范化根授权的转授权声明：
+     * 最大层级必须 ≥ 2（至少允许一层转授权才有意义）；声明的转授范围必须落在本级授权范围内。
+     * 未显式给出转授范围时，默认上限即本级范围。
+     */
+    private static SublicensePolicy normalizePolicy(SublicensePolicy policy,
+                                                    LocalDate startDate, LocalDate endDate,
+                                                    List<String> territories, List<String> media) {
+        if (policy == null || !policy.sublicensable()) {
+            return SublicensePolicy.forbidden();
+        }
+        Integer maxDepth = policy.maxDepth();
+        if (maxDepth == null) {
+            throw BusinessException.badRequest("允许转授权时必须声明最大层级");
+        }
+        if (maxDepth < 2) {
+            throw BusinessException.badRequest("最大层级至少为 2（本级为第 1 层，直接下级为第 2 层）");
+        }
+        List<String> subTerritories = policy.subTerritories() == null
+                ? territories : normalizeScope(policy.subTerritories(), "可转授地域");
+        List<String> subMedia = policy.subMedia() == null
+                ? media : normalizeScope(policy.subMedia(), "可转授媒介");
+        LocalDate subStart = policy.subStartDate() == null ? startDate : policy.subStartDate();
+        LocalDate subEnd = policy.subEndDate() == null ? endDate : policy.subEndDate();
+        if (subStart.isBefore(startDate) || subEnd.isAfter(endDate) || subStart.isAfter(subEnd)) {
+            throw BusinessException.badRequest("可转授期限必须落在授权期限内");
+        }
+        if (!new LinkedHashSet<>(territories).containsAll(new LinkedHashSet<>(subTerritories))) {
+            throw BusinessException.badRequest("可转授地域不能超出授权地域");
+        }
+        if (!new LinkedHashSet<>(media).containsAll(new LinkedHashSet<>(subMedia))) {
+            throw BusinessException.badRequest("可转授媒介不能超出授权媒介");
+        }
+        return new SublicensePolicy(true, maxDepth, subTerritories, subMedia, subStart, subEnd);
     }
 }

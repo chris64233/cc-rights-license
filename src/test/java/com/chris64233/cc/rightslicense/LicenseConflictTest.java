@@ -16,7 +16,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
-class LicenseConflictTest {
+class LicenseConflictTest extends AbstractIntegrationTest {
 
     @Autowired
     private LicenseService licenseService;
