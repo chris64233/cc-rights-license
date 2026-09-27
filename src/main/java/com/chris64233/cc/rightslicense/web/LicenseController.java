@@ -42,7 +42,9 @@ public class LicenseController {
         LicenseApplication application = licenseService.createApplication(
                 code, request.licensee(), request.type(),
                 request.startDate(), request.endDate(),
-                request.territories(), request.media());
+                request.territories(), request.media(),
+                request.sublicensePolicy() != null
+                        ? request.sublicensePolicy().toPolicy() : null);
         return ApplicationResponse.of(application);
     }
 

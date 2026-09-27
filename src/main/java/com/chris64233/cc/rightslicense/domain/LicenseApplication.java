@@ -65,6 +65,34 @@ public class LicenseApplication {
     @Column(length = 2000)
     private String conflictReason;
 
+    // ---- 申请生效时授权带有的转授权策略 ----
+
+    @Column(nullable = false)
+    private boolean sublicensable;
+
+    @Column(name = "max_sublicense_levels")
+    private Integer maxSublicenseLevels;
+
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "application_sublicense_territories",
+            joinColumns = @JoinColumn(name = "application_id"))
+    @OrderColumn(name = "idx")
+    @Column(name = "territory", length = 100)
+    private List<String> sublicensableTerritories = new ArrayList<>();
+
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "application_sublicense_media",
+            joinColumns = @JoinColumn(name = "application_id"))
+    @OrderColumn(name = "idx")
+    @Column(name = "medium", length = 100)
+    private List<String> sublicensableMedia = new ArrayList<>();
+
+    @Column(name = "sublicense_start_bound")
+    private LocalDate sublicenseStartBound;
+
+    @Column(name = "sublicense_end_bound")
+    private LocalDate sublicenseEndBound;
+
     protected LicenseApplication() {
     }
 
@@ -78,6 +106,22 @@ public class LicenseApplication {
         this.endDate = endDate;
         this.territories = new ArrayList<>(territories);
         this.media = new ArrayList<>(media);
+    }
+
+    public void applySublicensePolicy(SublicensePolicy policy) {
+        SublicensePolicy effective = policy != null ? policy : SublicensePolicy.disabled();
+        this.sublicensable = effective.sublicensable();
+        this.maxSublicenseLevels = effective.maxLevels();
+        this.sublicensableTerritories = new ArrayList<>(effective.territories());
+        this.sublicensableMedia = new ArrayList<>(effective.media());
+        this.sublicenseStartBound = effective.startBound();
+        this.sublicenseEndBound = effective.endBound();
+    }
+
+    public SublicensePolicy toSublicensePolicy() {
+        return new SublicensePolicy(sublicensable, maxSublicenseLevels,
+                sublicensableTerritories, sublicensableMedia,
+                sublicenseStartBound, sublicenseEndBound);
     }
 
     public Long getId() {
